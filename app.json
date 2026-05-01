@@ -1,0 +1,46 @@
+{
+  "expo": {
+    "name": "RefCheck",
+    "slug": "refcheck",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#000000"
+    },
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "RefCheck needs camera access to record soccer clips for fault analysis.",
+        "NSMicrophoneUsageDescription": "RefCheck needs microphone access to record audio with clips.",
+        "NSPhotoLibraryUsageDescription": "RefCheck needs photo library access to pick videos for analysis."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#000000"
+      },
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_EXTERNAL_STORAGE"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "RefCheck needs camera access to record soccer clips."
+        }
+      ]
+    ]
+  }
+}
