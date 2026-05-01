@@ -22,7 +22,9 @@ export default function CameraScreen() {
 
   const [isRecording, setIsRecording] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analyzingStep, setAnalyzingStep] = useState('');
   const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [cameraReady, setCameraReady] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showStatus, setShowStatus] = useState(false);
   const [verdict, setVerdict] = useState(null);
@@ -31,6 +33,13 @@ export default function CameraScreen() {
 
   const cameraRef = useRef(null);
   const timerRef = useRef(null);
+  // Timestamp (ms) at which recordAsync was called — used to enforce a
+  // minimum recording duration and avoid the "Unknown error" race condition
+  // where stopRecording is called before the native recorder has fully started.
+  const recordStartTimeRef = useRef(null);
+  // 1 500 ms gives the native camera recorder enough time to fully initialize
+  // before stopRecording() can be dispatched to it.
+  const MIN_RECORDING_MS = 1500;
 
   useEffect(() => {
     loadAiSettings();
@@ -62,10 +71,11 @@ export default function CameraScreen() {
   };
 
   const startRecording = useCallback(async () => {
-    if (!cameraRef.current || isRecording || isAnalyzing) return;
+    if (!cameraRef.current || isRecording || isAnalyzing || !cameraReady) return;
 
     setIsRecording(true);
     setRecordingSeconds(0);
+    recordStartTimeRef.current = Date.now();
     timerRef.current = setInterval(() => {
       setRecordingSeconds(s => s + 1);
     }, 1000);
@@ -74,7 +84,9 @@ export default function CameraScreen() {
       const video = await cameraRef.current.recordAsync({
         maxDuration: 30,
       });
-      handleVideoCapture(video.uri);
+      if (video?.uri) {
+        handleVideoCapture(video.uri);
+      }
     } catch (e) {
       console.error('Recording error', e);
       setIsRecording(false);
@@ -82,23 +94,43 @@ export default function CameraScreen() {
         clearInterval(timerRef.current);
         timerRef.current = null;
       }
+      Alert.alert('Recording Error', 'Failed to start recording. Please try again.');
     }
-  }, [isRecording, isAnalyzing]);
+  }, [isRecording, isAnalyzing, cameraReady]);
 
   const stopRecording = useCallback(() => {
-    if (!cameraRef.current || !isRecording) return;
-    cameraRef.current.stopRecording();
-    setIsRecording(false);
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
+    if (!cameraRef.current || !isRecording || !recordStartTimeRef.current) return;
+
+    const elapsed = Date.now() - recordStartTimeRef.current;
+    const remaining = MIN_RECORDING_MS - elapsed;
+
+    const doStop = () => {
+      cameraRef.current?.stopRecording();
+      setIsRecording(false);
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+
+    if (remaining > 0) {
+      // Wait until the native recorder has had time to fully initialize
+      setTimeout(doStop, remaining);
+    } else {
+      doStop();
     }
   }, [isRecording]);
 
   const handleVideoCapture = async (uri) => {
     setIsAnalyzing(true);
+    setAnalyzingStep('Preparing…');
     try {
-      const result = await analyzeVideo(uri, aiSettings.provider, aiSettings.apiKey);
+      const result = await analyzeVideo(
+        uri,
+        aiSettings.provider,
+        aiSettings.apiKey,
+        (step) => setAnalyzingStep(step),
+      );
       setVerdict(result.verdict);
       setReasoning(result.reasoning);
       setShowStatus(true);
@@ -109,6 +141,7 @@ export default function CameraScreen() {
       );
     } finally {
       setIsAnalyzing(false);
+      setAnalyzingStep('');
     }
   };
 
@@ -162,6 +195,7 @@ export default function CameraScreen() {
         style={StyleSheet.absoluteFill}
         mode="video"
         facing="back"
+        onCameraReady={() => setCameraReady(true)}
       />
 
       {/* Overlay UI */}
@@ -190,7 +224,10 @@ export default function CameraScreen() {
         {isAnalyzing && (
           <View style={styles.analyzingContainer}>
             <ActivityIndicator size="large" color="#0A84FF" />
-            <Text style={styles.analyzingText}>Analyzing clip...</Text>
+            <Text style={styles.analyzingText}>Analyzing clip…</Text>
+            {!!analyzingStep && (
+              <Text style={styles.analyzingStep}>{analyzingStep}</Text>
+            )}
           </View>
         )}
 
@@ -217,7 +254,7 @@ export default function CameraScreen() {
             onStartRecording={startRecording}
             onStopRecording={stopRecording}
             isRecording={isRecording}
-            disabled={isAnalyzing}
+            disabled={isAnalyzing || !cameraReady}
           />
 
           {/* Spacer for symmetry */}
@@ -338,6 +375,12 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '600',
+  },
+  analyzingStep: {
+    color: '#AEAEB2',
+    fontSize: 13,
+    textAlign: 'center',
+    marginTop: 2,
   },
   providerBadge: {
     alignSelf: 'center',
