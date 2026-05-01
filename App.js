@@ -4,7 +4,7 @@ import CameraScreen from './src/screens/CameraScreen';
 export default function App() {
   return (
     <>
-      <StatusBar style="light" />
+      <StatusBar style="light" translucent />
       <CameraScreen />
     </>
   );

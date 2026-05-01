@@ -7,13 +7,20 @@ import {
   Alert,
   ActivityIndicator,
   SafeAreaView,
+  Platform,
+  StatusBar as RNStatusBar,
 } from 'react-native';
 import { CameraView, useCameraPermissions, useMicrophonePermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import RecordButton from '../components/RecordButton';
 import StatusModal from '../components/StatusModal';
-import APIKeyModal, { STORAGE_KEY_PROVIDER, STORAGE_KEY_APIKEY } from '../components/APIKeyModal';
+import APIKeyModal, {
+  STORAGE_KEY_PROVIDER,
+  STORAGE_KEY_GEMINI_KEY,
+  STORAGE_KEY_OPENAI_KEY,
+  STORAGE_KEY_DEEPSEEK_KEY,
+} from '../components/APIKeyModal';
 import { analyzeVideo } from '../services/aiAnalysis';
 
 export default function CameraScreen() {
@@ -29,17 +36,24 @@ export default function CameraScreen() {
   const [showStatus, setShowStatus] = useState(false);
   const [verdict, setVerdict] = useState(null);
   const [reasoning, setReasoning] = useState('');
-  const [aiSettings, setAiSettings] = useState({ provider: 'mock', apiKey: '' });
+  const [aiSettings, setAiSettings] = useState({
+    provider: 'mock',
+    geminiKey: '',
+    openaiKey: '',
+    deepseekKey: '',
+  });
 
   const cameraRef = useRef(null);
   const timerRef = useRef(null);
+  // Ref-based recording flag so stopRecording never reads stale state.
+  const isRecordingRef = useRef(false);
   // Timestamp (ms) at which recordAsync was called — used to enforce a
   // minimum recording duration and avoid the "Unknown error" race condition
   // where stopRecording is called before the native recorder has fully started.
   const recordStartTimeRef = useRef(null);
-  // 1 500 ms gives the native camera recorder enough time to fully initialize
+  // 2 000 ms gives the native camera recorder enough time to fully initialize
   // before stopRecording() can be dispatched to it.
-  const MIN_RECORDING_MS = 1500;
+  const MIN_RECORDING_MS = 2000;
 
   useEffect(() => {
     loadAiSettings();
@@ -51,10 +65,14 @@ export default function CameraScreen() {
   const loadAiSettings = async () => {
     try {
       const provider = await AsyncStorage.getItem(STORAGE_KEY_PROVIDER);
-      const apiKey = await AsyncStorage.getItem(STORAGE_KEY_APIKEY);
+      const geminiKey = await AsyncStorage.getItem(STORAGE_KEY_GEMINI_KEY);
+      const openaiKey = await AsyncStorage.getItem(STORAGE_KEY_OPENAI_KEY);
+      const deepseekKey = await AsyncStorage.getItem(STORAGE_KEY_DEEPSEEK_KEY);
       setAiSettings({
         provider: provider || 'mock',
-        apiKey: apiKey || '',
+        geminiKey: geminiKey || '',
+        openaiKey: openaiKey || '',
+        deepseekKey: deepseekKey || '',
       });
     } catch (e) {
       console.error('Failed to load AI settings', e);
@@ -71,8 +89,9 @@ export default function CameraScreen() {
   };
 
   const startRecording = useCallback(async () => {
-    if (!cameraRef.current || isRecording || isAnalyzing || !cameraReady) return;
+    if (!cameraRef.current || isRecordingRef.current || isAnalyzing || !cameraReady) return;
 
+    isRecordingRef.current = true;
     setIsRecording(true);
     setRecordingSeconds(0);
     recordStartTimeRef.current = Date.now();
@@ -82,34 +101,42 @@ export default function CameraScreen() {
 
     try {
       const video = await cameraRef.current.recordAsync({
-        maxDuration: 30,
+        maxDuration: 15,
       });
       if (video?.uri) {
         handleVideoCapture(video.uri);
       }
     } catch (e) {
-      console.error('Recording error', e);
+      // Suppress the Android "Unknown error" that fires when stopRecording is
+      // called before the native encoder has fully initialised.  Any other
+      // unexpected error is surfaced to the user.
+      const msg = e?.message ?? '';
+      if (!msg.includes('Unknown error') && !msg.includes('already in progress')) {
+        console.error('Recording error', e);
+        Alert.alert('Recording Error', 'Failed to start recording. Please try again.');
+      }
+    } finally {
+      isRecordingRef.current = false;
+      recordStartTimeRef.current = null;
       setIsRecording(false);
       if (timerRef.current) {
         clearInterval(timerRef.current);
         timerRef.current = null;
       }
-      Alert.alert('Recording Error', 'Failed to start recording. Please try again.');
     }
-  }, [isRecording, isAnalyzing, cameraReady]);
+  }, [isAnalyzing, cameraReady]);
 
   const stopRecording = useCallback(() => {
-    if (!cameraRef.current || !isRecording || !recordStartTimeRef.current) return;
+    if (!cameraRef.current || !isRecordingRef.current || !recordStartTimeRef.current) return;
 
     const elapsed = Date.now() - recordStartTimeRef.current;
     const remaining = MIN_RECORDING_MS - elapsed;
 
     const doStop = () => {
-      cameraRef.current?.stopRecording();
-      setIsRecording(false);
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
+      try {
+        cameraRef.current?.stopRecording();
+      } catch (e) {
+        // Recording may have already stopped (e.g. maxDuration reached)
       }
     };
 
@@ -119,16 +146,22 @@ export default function CameraScreen() {
     } else {
       doStop();
     }
-  }, [isRecording]);
+  }, []);
 
   const handleVideoCapture = async (uri) => {
     setIsAnalyzing(true);
     setAnalyzingStep('Preparing…');
+    const apiKeyMap = {
+      gemini: aiSettings.geminiKey,
+      openai: aiSettings.openaiKey,
+      deepseek: aiSettings.deepseekKey,
+    };
+    const apiKey = apiKeyMap[aiSettings.provider] || '';
     try {
       const result = await analyzeVideo(
         uri,
         aiSettings.provider,
-        aiSettings.apiKey,
+        apiKey,
         (step) => setAnalyzingStep(step),
       );
       setVerdict(result.verdict);
@@ -234,7 +267,7 @@ export default function CameraScreen() {
         {/* AI provider badge */}
         <View style={styles.providerBadge}>
           <Text style={styles.providerBadgeText}>
-            {aiSettings.provider === 'mock' ? '🎲 Mock' : '✨ Gemini'}
+            {{ mock: '🎲 Mock', gemini: '✨ Gemini', openai: '🤖 OpenAI', deepseek: '🧠 DeepSeek' }[aiSettings.provider] ?? '🎲 Mock'}
           </Text>
         </View>
 
@@ -320,7 +353,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
-    paddingTop: 12,
+    paddingTop: Platform.OS === 'android' ? (RNStatusBar.currentHeight ?? 24) + 12 : 12,
   },
   appTitle: {
     color: '#FFFFFF',

@@ -9,17 +9,35 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
+  ScrollView,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const STORAGE_KEY_PROVIDER = 'refcheck_ai_provider';
-const STORAGE_KEY_APIKEY = 'refcheck_api_key';
+const STORAGE_KEY_GEMINI_KEY = 'refcheck_gemini_key';
+const STORAGE_KEY_OPENAI_KEY = 'refcheck_openai_key';
+const STORAGE_KEY_DEEPSEEK_KEY = 'refcheck_deepseek_key';
 
-export { STORAGE_KEY_PROVIDER, STORAGE_KEY_APIKEY };
+export { STORAGE_KEY_PROVIDER, STORAGE_KEY_GEMINI_KEY, STORAGE_KEY_OPENAI_KEY, STORAGE_KEY_DEEPSEEK_KEY };
+
+const PROVIDERS = [
+  { id: 'gemini', label: '✨ Gemini' },
+  { id: 'openai', label: '🤖 OpenAI' },
+  { id: 'deepseek', label: '🧠 DeepSeek' },
+  { id: 'mock', label: '🎲 Mock' },
+];
+
+const PROVIDER_HINTS = {
+  gemini: { placeholder: 'Enter your Gemini API key', hint: 'Get your free key at aistudio.google.com' },
+  openai: { placeholder: 'Enter your OpenAI API key', hint: 'Get your key at platform.openai.com' },
+  deepseek: { placeholder: 'Enter your DeepSeek API key', hint: 'Get your key at platform.deepseek.com' },
+};
 
 export default function APIKeyModal({ visible, onClose, onSave }) {
   const [provider, setProvider] = useState('mock');
-  const [apiKey, setApiKey] = useState('');
+  const [geminiKey, setGeminiKey] = useState('');
+  const [openaiKey, setOpenaiKey] = useState('');
+  const [deepseekKey, setDeepseekKey] = useState('');
   const [showKey, setShowKey] = useState(false);
 
   useEffect(() => {
@@ -31,9 +49,13 @@ export default function APIKeyModal({ visible, onClose, onSave }) {
   const loadSettings = async () => {
     try {
       const savedProvider = await AsyncStorage.getItem(STORAGE_KEY_PROVIDER);
-      const savedKey = await AsyncStorage.getItem(STORAGE_KEY_APIKEY);
+      const savedGemini = await AsyncStorage.getItem(STORAGE_KEY_GEMINI_KEY);
+      const savedOpenai = await AsyncStorage.getItem(STORAGE_KEY_OPENAI_KEY);
+      const savedDeepseek = await AsyncStorage.getItem(STORAGE_KEY_DEEPSEEK_KEY);
       if (savedProvider) setProvider(savedProvider);
-      if (savedKey) setApiKey(savedKey);
+      if (savedGemini) setGeminiKey(savedGemini);
+      if (savedOpenai) setOpenaiKey(savedOpenai);
+      if (savedDeepseek) setDeepseekKey(savedDeepseek);
     } catch (e) {
       console.error('Failed to load settings', e);
     }
@@ -42,13 +64,28 @@ export default function APIKeyModal({ visible, onClose, onSave }) {
   const handleSave = async () => {
     try {
       await AsyncStorage.setItem(STORAGE_KEY_PROVIDER, provider);
-      await AsyncStorage.setItem(STORAGE_KEY_APIKEY, apiKey);
-      onSave({ provider, apiKey });
+      await AsyncStorage.setItem(STORAGE_KEY_GEMINI_KEY, geminiKey);
+      await AsyncStorage.setItem(STORAGE_KEY_OPENAI_KEY, openaiKey);
+      await AsyncStorage.setItem(STORAGE_KEY_DEEPSEEK_KEY, deepseekKey);
+      onSave({ provider, geminiKey, openaiKey, deepseekKey });
       onClose();
     } catch (e) {
       Alert.alert('Error', 'Failed to save settings.');
     }
   };
+
+  const currentKey = provider === 'gemini' ? geminiKey
+    : provider === 'openai' ? openaiKey
+    : provider === 'deepseek' ? deepseekKey
+    : '';
+
+  const setCurrentKey = (val) => {
+    if (provider === 'gemini') setGeminiKey(val);
+    else if (provider === 'openai') setOpenaiKey(val);
+    else if (provider === 'deepseek') setDeepseekKey(val);
+  };
+
+  const hint = PROVIDER_HINTS[provider] ?? { placeholder: '', hint: '' };
 
   return (
     <Modal
@@ -66,38 +103,40 @@ export default function APIKeyModal({ visible, onClose, onSave }) {
 
           {/* Provider selection */}
           <Text style={styles.label}>AI Provider</Text>
-          <View style={styles.providerRow}>
-            {['gemini', 'mock'].map(p => (
-              <TouchableOpacity
-                key={p}
-                style={[
-                  styles.providerOption,
-                  provider === p && styles.providerOptionSelected,
-                ]}
-                onPress={() => setProvider(p)}
-              >
-                <Text
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.providerScroll}>
+            <View style={styles.providerRow}>
+              {PROVIDERS.map(p => (
+                <TouchableOpacity
+                  key={p.id}
                   style={[
-                    styles.providerText,
-                    provider === p && styles.providerTextSelected,
+                    styles.providerOption,
+                    provider === p.id && styles.providerOptionSelected,
                   ]}
+                  onPress={() => setProvider(p.id)}
                 >
-                  {p === 'gemini' ? '✨ Gemini' : '🎲 Mock'}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
+                  <Text
+                    style={[
+                      styles.providerText,
+                      provider === p.id && styles.providerTextSelected,
+                    ]}
+                  >
+                    {p.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </ScrollView>
 
-          {/* API Key input */}
+          {/* API Key input — hidden for mock provider */}
           {provider !== 'mock' && (
             <>
               <Text style={styles.label}>API Key</Text>
               <View style={styles.inputRow}>
                 <TextInput
                   style={styles.input}
-                  value={apiKey}
-                  onChangeText={setApiKey}
-                  placeholder="Enter your Gemini API key"
+                  value={currentKey}
+                  onChangeText={setCurrentKey}
+                  placeholder={hint.placeholder}
                   placeholderTextColor="#636366"
                   secureTextEntry={!showKey}
                   autoCapitalize="none"
@@ -110,9 +149,7 @@ export default function APIKeyModal({ visible, onClose, onSave }) {
                   <Text style={styles.eyeIcon}>{showKey ? '🙈' : '👁️'}</Text>
                 </TouchableOpacity>
               </View>
-              <Text style={styles.hint}>
-                Get your free API key at aistudio.google.com
-              </Text>
+              <Text style={styles.hint}>{hint.hint}</Text>
             </>
           )}
 
@@ -159,14 +196,16 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
-  providerRow: {
-    flexDirection: 'row',
-    gap: 12,
+  providerScroll: {
     marginBottom: 20,
   },
+  providerRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
   providerOption: {
-    flex: 1,
     paddingVertical: 12,
+    paddingHorizontal: 16,
     borderRadius: 12,
     backgroundColor: '#2C2C2E',
     alignItems: 'center',
@@ -176,7 +215,7 @@ const styles = StyleSheet.create({
   },
   providerText: {
     color: '#8E8E93',
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '600',
   },
   providerTextSelected: {
@@ -236,3 +275,4 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 });
+

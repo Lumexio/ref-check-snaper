@@ -3,11 +3,12 @@ import * as VideoThumbnails from 'expo-video-thumbnails';
 
 const GEMINI_API_URL =
   'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
+const OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions';
+const DEEPSEEK_API_URL = 'https://api.deepseek.com/v1/chat/completions';
 
 // Timestamps (ms) at which to sample frames from the video.
-// The array has 12 entries; extractVideoFrames() respects the maxFrames cap
-// and also stops early when a timestamp exceeds the video duration.
-const FRAME_TIMESTAMPS_MS = [0, 500, 1000, 1500, 2000, 3000, 4000, 5000, 7000, 10000, 15000, 20000];
+// Capped at 15 000 ms to match the 15-second recording limit.
+const FRAME_TIMESTAMPS_MS = [0, 500, 1000, 1500, 2000, 3000, 4000, 5000, 7000, 10000, 13000, 15000];
 
 const ANALYSIS_PROMPT = `You are a professional soccer/football referee assistant.
 You are given a sequence of video frames (extracted at regular intervals from a single clip).
@@ -137,6 +138,100 @@ export async function analyzeVideoWithGemini(videoUri, apiKey, onProgress) {
   }
 }
 
+/**
+ * Shared analysis function for OpenAI-compatible APIs (OpenAI, DeepSeek).
+ * Both services expose a /v1/chat/completions endpoint that accepts vision
+ * messages in the same format.
+ */
+async function analyzeVideoWithOpenAICompatible(videoUri, apiKey, onProgress, { apiUrl, model }) {
+  try {
+    onProgress && onProgress('Extracting frames from video…');
+    const frames = await extractVideoFrames(videoUri, 10, onProgress);
+
+    if (frames.length === 0) {
+      throw new Error('Could not extract any frames from the video. Please try again.');
+    }
+
+    onProgress && onProgress(`Sending ${frames.length} frames to AI…`);
+
+    const imageContent = frames.map(base64 => ({
+      type: 'image_url',
+      image_url: {
+        url: `data:image/jpeg;base64,${base64}`,
+        detail: 'low',
+      },
+    }));
+
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              ...imageContent,
+              { type: 'text', text: ANALYSIS_PROMPT },
+            ],
+          },
+        ],
+        max_tokens: 1024,
+        temperature: 0.1,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error?.message || `API error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    const text = data.choices?.[0]?.message?.content;
+
+    if (!text) {
+      throw new Error('No response from AI');
+    }
+
+    onProgress && onProgress('Parsing AI response…');
+    const result = JSON.parse(text.trim());
+
+    if (!['FAULT', 'NOT FAULT', 'INCONCLUSIVE'].includes(result.verdict)) {
+      throw new Error(`Invalid verdict from AI: "${result.verdict}"`);
+    }
+
+    return {
+      verdict: result.verdict,
+      reasoning: result.reasoning || 'No reasoning provided.',
+    };
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      return {
+        verdict: 'INCONCLUSIVE',
+        reasoning: 'The AI response could not be parsed correctly. Please try again.',
+      };
+    }
+    throw error;
+  }
+}
+
+export async function analyzeVideoWithOpenAI(videoUri, apiKey, onProgress) {
+  return analyzeVideoWithOpenAICompatible(videoUri, apiKey, onProgress, {
+    apiUrl: OPENAI_API_URL,
+    model: 'gpt-4o',
+  });
+}
+
+export async function analyzeVideoWithDeepSeek(videoUri, apiKey, onProgress) {
+  return analyzeVideoWithOpenAICompatible(videoUri, apiKey, onProgress, {
+    apiUrl: DEEPSEEK_API_URL,
+    model: 'deepseek-chat',
+  });
+}
+
 export async function analyzeVideo(videoUri, provider, apiKey, onProgress) {
   if (provider === 'mock' || !apiKey) {
     // Mock analysis for testing
@@ -154,5 +249,14 @@ export async function analyzeVideo(videoUri, provider, apiKey, onProgress) {
     return analyzeVideoWithGemini(videoUri, apiKey, onProgress);
   }
 
+  if (provider === 'openai') {
+    return analyzeVideoWithOpenAI(videoUri, apiKey, onProgress);
+  }
+
+  if (provider === 'deepseek') {
+    return analyzeVideoWithDeepSeek(videoUri, apiKey, onProgress);
+  }
+
   throw new Error(`Unknown provider: ${provider}`);
 }
+
